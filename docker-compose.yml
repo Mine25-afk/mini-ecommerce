@@ -1,0 +1,102 @@
+name: mini-ecommerce
+
+x-service-env: &service-env
+  NODE_ENV: production
+  MONGODB_URI: mongodb://mongo:27017/mini-ecommerce?replicaSet=rs0
+  JWT_SECRET: ${JWT_SECRET:-cambia-este-secreto-en-produccion}
+
+services:
+  # Replica set de un nodo: MongoDB solo permite transacciones multi-documento en replica set.
+  mongo:
+    image: mongo:7
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: >
+        mongosh --quiet --eval "try { rs.status() } catch (e) { rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'mongo:27017' }] }) } quit(db.hello().isWritablePrimary ? 0 : 1)"
+      interval: 5s
+      timeout: 10s
+      retries: 20
+      start_period: 5s
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  auth:
+    build:
+      context: .
+      dockerfile: apps/auth/Dockerfile
+    environment:
+      <<: *service-env
+      PORT: 3001
+      JWT_EXPIRES_IN: 1h
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@mini-ecommerce.dev}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-Admin123!}
+    ports:
+      - "3001:3001"
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+  catalog:
+    build:
+      context: .
+      dockerfile: apps/catalog/Dockerfile
+    environment:
+      <<: *service-env
+      PORT: 3002
+      REDIS_URI: redis://redis:6379
+      RABBIT_MQ_URI: amqp://guest:guest@rabbitmq:5672
+      RABBIT_MQ_CATALOG_QUEUE: catalog
+      CACHE_TTL_SECONDS: 300
+    ports:
+      - "3002:3002"
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  order:
+    build:
+      context: .
+      dockerfile: apps/order/Dockerfile
+    environment:
+      <<: *service-env
+      PORT: 3003
+      RABBIT_MQ_URI: amqp://guest:guest@rabbitmq:5672
+      RABBIT_MQ_CATALOG_QUEUE: catalog
+    ports:
+      - "3003:3003"
+    depends_on:
+      mongo:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+volumes:
+  mongo-data:
