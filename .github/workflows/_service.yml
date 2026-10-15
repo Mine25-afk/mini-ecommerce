@@ -1,0 +1,53 @@
+# Pipeline reutilizable: cada servicio lo llama con su nombre de app.
+name: service-pipeline
+
+on:
+  workflow_call:
+    inputs:
+      app:
+        description: Nombre de la app del monorepo (auth, catalog, order)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  test-build:
+    name: Lint, tests y build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run lint
+
+      - name: Tests de la app y de la librería compartida
+        run: npx jest "apps/${{ inputs.app }}/" "libs/" --coverage
+
+      - run: npx nest build ${{ inputs.app }}
+
+  docker:
+    name: Imagen Docker
+    needs: test-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # push: false hasta tener registry; la etiqueta ya sigue el esquema versión + SHA.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/${{ inputs.app }}/Dockerfile
+          push: false
+          tags: mini-ecommerce/${{ inputs.app }}:${{ github.sha }}
+          cache-from: type=gha,scope=${{ inputs.app }}
+          cache-to: type=gha,mode=max,scope=${{ inputs.app }}
