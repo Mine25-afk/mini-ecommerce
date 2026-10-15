@@ -1,0 +1,59 @@
+### Recorrido completo contra docker compose (REST Client de VS Code / JetBrains HTTP Client)
+
+@auth = http://localhost:3001
+@catalog = http://localhost:3002
+@order = http://localhost:3003
+
+### 1. Login del admin semilla
+# @name admin
+POST {{auth}}/auth/login
+Content-Type: application/json
+
+{ "email": "admin@mini-ecommerce.dev", "password": "Admin123!" }
+
+### 2. Crear producto (solo admin)
+# @name producto
+POST {{catalog}}/products
+Authorization: Bearer {{admin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "Café de altura 500 g", "description": "Tostado medio", "sku": "CAF-500", "category": "cafe", "price": 189.5, "stock": 10 }
+
+### 3. Registro de cliente
+# @name cliente
+POST {{auth}}/auth/register
+Content-Type: application/json
+
+{ "email": "ana@correo.com", "password": "Secreta123!", "name": "Ana" }
+
+### 4. Catálogo público con búsqueda (la segunda vez sale de Redis)
+GET {{catalog}}/products?search=café&page=1&limit=10
+
+### 5. Pedido del cliente: descuenta stock y publica order.created
+# @name pedido
+POST {{order}}/orders
+Authorization: Bearer {{cliente.response.body.accessToken}}
+Content-Type: application/json
+
+{ "items": [{ "productId": "{{producto.response.body._id}}", "quantity": 2 }] }
+
+### 6. Stock actualizado (caché invalidada por el evento): 8
+GET {{catalog}}/products/{{producto.response.body._id}}
+
+### 7. Pedir más de lo que hay → 409 y el stock no cambia
+POST {{order}}/orders
+Authorization: Bearer {{cliente.response.body.accessToken}}
+Content-Type: application/json
+
+{ "items": [{ "productId": "{{producto.response.body._id}}", "quantity": 50 }] }
+
+### 8. Mis pedidos
+GET {{order}}/orders?page=1&limit=10
+Authorization: Bearer {{cliente.response.body.accessToken}}
+
+### 9. Un cliente no puede crear productos → 403
+POST {{catalog}}/products
+Authorization: Bearer {{cliente.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "X", "sku": "X-001", "price": 1, "stock": 1 }
